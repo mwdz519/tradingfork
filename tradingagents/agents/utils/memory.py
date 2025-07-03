@@ -1,113 +1,82 @@
-import chromadb
-from chromadb.config import Settings
-from openai import OpenAI
+import os
+import faiss
+import numpy as np
+import openai
+import google.generativeai as genai
+from typing import Dict, Any, List
 
+# We will get the config directly when the class is initialized
+# from tradingagents.config import config 
 
 class FinancialSituationMemory:
-    def __init__(self, name, config):
-        if config["backend_url"] == "http://localhost:11434/v1":
-            self.embedding = "nomic-embed-text"
+    """A memory system for financial agents using FAISS for similarity search."""
+
+    def __init__(self, name: str, config: Dict[str, Any], embedding_model: str = "text-embedding-3-small"):
+        self.name = name
+        self.config = config
+        self.llm_provider = self.config.get("llm_provider", "openai").lower()
+
+        # Configure the client and embedding settings based on the LLM provider
+        if self.llm_provider == 'openai':
+            self.embedding_model = embedding_model
+            self.client = openai.OpenAI()
+            # OpenAI's text-embedding-3-small has 1536 dimensions
+            self.index = faiss.IndexFlatL2(1536)
+        elif self.llm_provider == 'google':
+            self.embedding_model = "models/embedding-001"
+            # Ensure the API key is configured for the genai library
+            if "GOOGLE_API_KEY" not in os.environ:
+                raise ValueError("GOOGLE_API_KEY environment variable not set.")
+            genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
+            self.client = None  # Not needed for google's module-level functions
+            # Google's embedding-001 model has 768 dimensions
+            self.index = faiss.IndexFlatL2(768)
         else:
-            self.embedding = "text-embedding-3-small"
-        self.client = OpenAI(base_url=config["backend_url"])
-        self.chroma_client = chromadb.Client(Settings(allow_reset=True))
-        self.situation_collection = self.chroma_client.create_collection(name=name)
+            raise ValueError(f"Unsupported LLM provider for embeddings: {self.llm_provider}")
 
-    def get_embedding(self, text):
-        """Get OpenAI embedding for a text"""
+        self.memory_vectors = []
+        self.texts = []
+
+    def get_embedding(self, text: str) -> List[float]:
+        """Generates an embedding for the given text using the configured provider."""
+        text = str(text).replace("\n", " ")
         
-        response = self.client.embeddings.create(
-            model=self.embedding, input=text
-        )
-        return response.data[0].embedding
+        if self.llm_provider == 'openai':
+            response = self.client.embeddings.create(input=[text], model=self.embedding_model)
+            return response.data[0].embedding
+        
+        elif self.llm_provider == 'google':
+            result = genai.embed_content(model=self.embedding_model, content=text)
+            return result['embedding']
 
-    def add_situations(self, situations_and_advice):
-        """Add financial situations and their corresponding advice. Parameter is a list of tuples (situation, rec)"""
+    def add_memory(self, memory_text: str):
+        """Adds a memory to the store."""
+        if not memory_text or not memory_text.strip():
+            return
+            
+        embedding = self.get_embedding(memory_text)
+        if embedding:
+            embedding_np = np.array([embedding], dtype='float32')
+            self.index.add(embedding_np)
+            self.texts.append(memory_text)
 
-        situations = []
-        advice = []
-        ids = []
-        embeddings = []
+    def get_memories(self, current_situation: str, n_matches: int = 1) -> str:
+        """Retrieves the most relevant memories for a given situation."""
+        if self.index.ntotal == 0:
+            return "No past memories found."
 
-        offset = self.situation_collection.count()
+        query_embedding = np.array([self.get_embedding(current_situation)], dtype='float32')
+        distances, indices = self.index.search(query_embedding, k=min(n_matches, self.index.ntotal))
 
-        for i, (situation, recommendation) in enumerate(situations_and_advice):
-            situations.append(situation)
-            advice.append(recommendation)
-            ids.append(str(offset + i))
-            embeddings.append(self.get_embedding(situation))
+        recalled_memories = []
+        for i in indices[0]:
+            if i != -1:
+                recalled_memories.append(self.texts[i])
+        
+        return "\n\n".join(recalled_memories)
 
-        self.situation_collection.add(
-            documents=situations,
-            metadatas=[{"recommendation": rec} for rec in advice],
-            embeddings=embeddings,
-            ids=ids,
-        )
-
-    def get_memories(self, current_situation, n_matches=1):
-        """Find matching recommendations using OpenAI embeddings"""
-        query_embedding = self.get_embedding(current_situation)
-
-        results = self.situation_collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_matches,
-            include=["metadatas", "documents", "distances"],
-        )
-
-        matched_results = []
-        for i in range(len(results["documents"][0])):
-            matched_results.append(
-                {
-                    "matched_situation": results["documents"][0][i],
-                    "recommendation": results["metadatas"][0][i]["recommendation"],
-                    "similarity_score": 1 - results["distances"][0][i],
-                }
-            )
-
-        return matched_results
-
-
-if __name__ == "__main__":
-    # Example usage
-    matcher = FinancialSituationMemory()
-
-    # Example data
-    example_data = [
-        (
-            "High inflation rate with rising interest rates and declining consumer spending",
-            "Consider defensive sectors like consumer staples and utilities. Review fixed-income portfolio duration.",
-        ),
-        (
-            "Tech sector showing high volatility with increasing institutional selling pressure",
-            "Reduce exposure to high-growth tech stocks. Look for value opportunities in established tech companies with strong cash flows.",
-        ),
-        (
-            "Strong dollar affecting emerging markets with increasing forex volatility",
-            "Hedge currency exposure in international positions. Consider reducing allocation to emerging market debt.",
-        ),
-        (
-            "Market showing signs of sector rotation with rising yields",
-            "Rebalance portfolio to maintain target allocations. Consider increasing exposure to sectors benefiting from higher rates.",
-        ),
-    ]
-
-    # Add the example situations and recommendations
-    matcher.add_situations(example_data)
-
-    # Example query
-    current_situation = """
-    Market showing increased volatility in tech sector, with institutional investors 
-    reducing positions and rising interest rates affecting growth stock valuations
-    """
-
-    try:
-        recommendations = matcher.get_memories(current_situation, n_matches=2)
-
-        for i, rec in enumerate(recommendations, 1):
-            print(f"\nMatch {i}:")
-            print(f"Similarity Score: {rec['similarity_score']:.2f}")
-            print(f"Matched Situation: {rec['matched_situation']}")
-            print(f"Recommendation: {rec['recommendation']}")
-
-    except Exception as e:
-        print(f"Error during recommendation: {str(e)}")
+    def clear_memory(self):
+        """Clears all memories from the store."""
+        self.index.reset()
+        self.memory_vectors = []
+        self.texts = []

@@ -1,5 +1,3 @@
-# TradingAgents/graph/trading_graph.py
-
 import os
 from pathlib import Path
 import json
@@ -125,7 +123,7 @@ class TradingAgentsGraph:
             "social": ToolNode(
                 [
                     # online tools
-                    self.toolkit.get_stock_news_openai,
+                    # self.toolkit.get_stock_news_openai,
                     # offline tools
                     self.toolkit.get_reddit_stock_info,
                 ]
@@ -133,7 +131,7 @@ class TradingAgentsGraph:
             "news": ToolNode(
                 [
                     # online tools
-                    self.toolkit.get_global_news_openai,
+                    # self.toolkit.get_global_news_openai,
                     self.toolkit.get_google_news,
                     # offline tools
                     self.toolkit.get_finnhub_news,
@@ -143,7 +141,7 @@ class TradingAgentsGraph:
             "fundamentals": ToolNode(
                 [
                     # online tools
-                    self.toolkit.get_fundamentals_openai,
+                    # self.toolkit.get_fundamentals_openai,
                     # offline tools
                     self.toolkit.get_finnhub_company_insider_sentiment,
                     self.toolkit.get_finnhub_company_insider_transactions,
@@ -184,7 +182,7 @@ class TradingAgentsGraph:
         self.curr_state = final_state
 
         # Log state
-        self._log_state(trade_date, final_state)
+        self.log_state(trade_date, final_state)
 
         # Return decision and processed signal
         return final_state, self.process_signal(final_state["final_trade_decision"])

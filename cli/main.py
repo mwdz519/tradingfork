@@ -787,9 +787,13 @@ def run_analysis():
             if section_name in obj.report_sections and obj.report_sections[section_name] is not None:
                 content = obj.report_sections[section_name]
                 if content:
-                    file_name = f"{section_name}.md"
-                    with open(report_dir / file_name, "w") as f:
-                        f.write(content)
+    # Check if content is a list and join it if necessary
+    if isinstance(content, list):
+        content = "\n".join(map(str, content))
+
+    file_name = f"{section_name}.md"
+    with open(report_dir / file_name, "w", encoding="utf-8") as f:
+        f.write(content)
         return wrapper
 
     message_buffer.add_message = save_message_decorator(message_buffer, "add_message")

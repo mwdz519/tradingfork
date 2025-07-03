@@ -7,3 +7,8 @@ eval_results/
 eval_data/
 *.egg-info/
 .env
+# Ignore generated results and log folders
+results/
+
+# Ignore local executables
+python.exe
